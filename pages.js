@@ -102,6 +102,21 @@ const creditTools = user => layout({ user, title: 'Credit Dashboard — CreditFl
   body: `<section class="wrap sect"><div id="array-host" class="array-host"><p class="muted">Loading your credit tools…</p></div></section>
 <script>window.__ARRAY_APP_KEY__=${JSON.stringify(cfg.arrayAppKey)};</script><script src="/js/credit-tools.js"></script>` });
 
+const admin = user => layout({ user, title: 'Admin — CreditFlex.ai', body: `
+<section class="wrap sect"><h2>Admin</h2>
+<p class="muted">Enrolls every member who has an Array ID in all CreditFlex products, one at a time. Safe to run more than once.</p>
+<p><button class="btn big" id="enroll">Enroll existing members</button></p>
+<pre class="card" id="out" style="white-space:pre-wrap;min-height:80px">Results will appear here.</pre></section>
+<script>
+document.getElementById('enroll').addEventListener('click', function () {
+  var out = document.getElementById('out'); out.textContent = 'Working…';
+  fetch('/api/array/enroll-existing', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { out.textContent = JSON.stringify(j, null, 2); })
+    .catch(function () { out.textContent = 'Request failed. Check the Render logs.'; });
+});
+</script>` });
+
 const simple = (user, title, text) => layout({ user, title: `${title} — CreditFlex.ai`, body: `<section class="wrap sect"><h2>${esc(title)}</h2><p class="muted">${esc(text)}</p></section>` });
 
-module.exports = { home, pricing, authPage, dashboard, creditTools, simple };
+module.exports = { home, pricing, authPage, dashboard, creditTools, admin, simple };
