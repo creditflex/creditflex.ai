@@ -95,6 +95,8 @@ async function handle(req, res) {
   const p = url.pathname.replace(/(.)\/$/, '$1');
   const uid = auth.getSessionUserId(req);
   const user = uid ? db.byId(uid) : null;
+  // Sliding inactivity timeout: every request from a signed-in member renews the cookie's activity time.
+  if (user && p !== '/api/logout') auth.setSession(res, user.id);
 
   // ---------- API ----------
   if (p.startsWith('/api/')) {
@@ -117,6 +119,7 @@ async function handle(req, res) {
         auth.setSession(res, u.id);
         return json(res, 200, { ok: true });
       }
+      if (req.method === 'POST' && p === '/api/session/ping') { await readJson(req); return user ? json(res, 200, { ok: true }) : json(res, 401, { error: 'expired' }); }
       if (req.method === 'POST' && p === '/api/logout') { await readJson(req); auth.clearSession(res); return json(res, 200, { ok: true }); }
 
       if (!user) return json(res, 401, { error: 'Not logged in' });

@@ -16,9 +16,11 @@ exports.verifyPassword = (pw, stored) => {
 
 const sign = v => crypto.createHmac('sha256', cfg.sessionSecret).update(v).digest('base64url');
 const NAME = 'cf_session';
+const IDLE_MS = Number(process.env.IDLE_TIMEOUT_MINUTES || 5) * 60000; // sign out after this much inactivity
+exports.IDLE_MS = IDLE_MS;
 
 exports.setSession = (res, uid) => {
-  const payload = Buffer.from(JSON.stringify({ uid, exp: Date.now() + 14 * 864e5 })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ uid, exp: Date.now() + 14 * 864e5, last: Date.now() })).toString('base64url');
   const flags = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${14 * 86400}${cfg.isProd ? '; Secure' : ''}`;
   res.setHeader('Set-Cookie', `${NAME}=${payload}.${sign(payload)}; ${flags}`);
 };
@@ -34,6 +36,6 @@ exports.getSessionUserId = req => {
   if (sig.length !== good.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good))) return null;
   try {
     const d = JSON.parse(Buffer.from(payload, 'base64url').toString());
-    return d.exp > Date.now() ? d.uid : null;
+    return d.exp > Date.now() && Date.now() - (d.last || 0) < IDLE_MS ? d.uid : null;
   } catch (_) { return null; }
 };
