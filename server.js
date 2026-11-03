@@ -174,7 +174,7 @@ async function handle(req, res) {
         try {
           const usingOwn = !!user.array_user_id;
           const results = await array.probe(user.array_user_id || 'diagnostic-test-user');
-          return json(res, 200, { usingOwnMember: usingOwn, tokenSetting: !!process.env.ARRAY_SERVER_TOKEN, appKeySet: !!cfg.arrayAppKey, results });
+          return json(res, 200, { usingOwnMember: usingOwn, tokenSetting: !!process.env.ARRAY_SERVER_TOKEN, tokenInfo: array.tokenInfo(), appKeySet: !!cfg.arrayAppKey, appKey: cfg.arrayAppKey, appKeyFromRender: !!process.env.ARRAY_APP_KEY, results });
         } catch (e) { return json(res, 200, { error: e.message }); }
       }
       // POST /api/admin/test-email (admin only): sends a test message to the notification address

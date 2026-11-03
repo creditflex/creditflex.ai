@@ -83,6 +83,16 @@ exports.postJson = async (url, headers, body) => {
   throw lastErr;
 };
 
+function getOnce(url, agent) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request({ agent, host: u.hostname, port: 443, path: u.pathname, method: 'GET', timeout: 15000 }, res => {
+      let b = ''; res.on('data', c => (b += c)); res.on('end', () => resolve(b.trim().slice(0, 60)));
+    });
+    req.on('timeout', () => req.destroy(new Error('timed out'))); req.on('error', reject); req.end();
+  });
+}
+
 // Admin diagnostic: tries each configured proxy on its own and reports what happened (never shows credentials).
 exports.probe = async (url, headers, body) => {
   const data = JSON.stringify(body);
@@ -93,8 +103,10 @@ exports.probe = async (url, headers, body) => {
     if (!src.valid) { out.push({ proxy: src.label, ok: false, detail: 'This value is not a valid proxy URL. Expected http://USERNAME:PASSWORD@HOST:PORT.' + notes }); continue; }
     const name = src.label + ' (' + hostOf(src.url) + ')';
     try {
+      let ip = '';
+      try { ip = await getOnce('https://api.ipify.org/', agentFor(src.url)); } catch (_) { ip = 'unknown'; }
       const r = await requestOnce(url, headers, data, agentFor(src.url));
-      out.push({ proxy: name, ok: true, status: r.status, hasToken: !!(r.json && r.json.userToken), detail: (r.status === 200 ? 'Array answered and issued a token.' : 'Array answered with HTTP ' + r.status + ' ' + String(r.text).slice(0, 200)) + notes });
+      out.push({ ip, proxy: name, ok: true, status: r.status, hasToken: !!(r.json && r.json.userToken), detail: 'Array sees this IP: ' + ip + '. ' + (r.status === 200 ? 'Array answered and issued a token.' : 'Array answered with HTTP ' + r.status + ' ' + String(r.text).slice(0, 200)) + notes });
     } catch (e) { out.push({ proxy: name, ok: false, detail: String(e.message).replace(/\/\/[^@\s]*@/g, '//***@') + notes }); }
   }
   return out;
