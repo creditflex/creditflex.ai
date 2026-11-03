@@ -12,7 +12,7 @@ try {
 module.exports = {
   port: Number(process.env.PORT || 3000),
   isProd: process.env.NODE_ENV === 'production',
-  sessionSecret: process.env.SESSION_SECRET || 'dev-only-secret-change-me',
+  sessionSecret: process.env.SESSION_SECRET || (process.env.NODE_ENV === 'production' ? require('crypto').randomBytes(32).toString('hex') : 'dev-only-secret-change-me'),
   arrayAppKey: process.env.ARRAY_APP_KEY || 'F22B34C8-260F-4DEF-AB23-8876B4262C51',
 // Ordered list of outbound proxies; the first is tried first, the rest are failovers.
   // Set PROXY_URLS (comma-separated), or PROXYMESH_URL and/or QUOTAGUARDSTATIC_URL (ProxyMesh is tried first).

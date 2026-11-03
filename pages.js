@@ -127,8 +127,8 @@ document.getElementById('testarray').addEventListener('click', function () {
   var o = document.getElementById('arrout'); o.textContent = 'Testing…';
   post('/api/admin/test-array').then(function (j) {
     if (j.error) { o.textContent = 'Error: ' + j.error; return; }
-    var t = 'Server token set: ' + j.tokenSetting + '\nApp key set: ' + j.appKeySet + '\nTested with: ' + (j.usingOwnMember ? 'your own member record' : 'a dummy user (a 4xx answer from Array still proves the connection works)') + '\n';
-    j.results.forEach(function (r) { t += '\n' + (r.ok ? 'OK    ' : 'FAIL  ') + r.proxy + '\n      ' + r.detail + '\n'; });
+    var t = 'Server token set: ' + j.tokenSetting + '\\nApp key set: ' + j.appKeySet + '\\nTested with: ' + (j.usingOwnMember ? 'your own member record' : 'a dummy user (a 4xx answer from Array still proves the connection works)') + '\\n';
+    j.results.forEach(function (r) { t += '\\n' + (r.ok ? 'OK    ' : 'FAIL  ') + r.proxy + '\\n      ' + r.detail + '\\n'; });
     o.textContent = t;
   }).catch(function () { o.textContent = 'Request failed. Check the Render logs.'; });
 });
