@@ -102,18 +102,26 @@ const creditTools = user => layout({ user, title: 'Credit Dashboard — CreditFl
   body: `<section class="wrap sect"><div id="array-host" class="array-host"><p class="muted">Loading your credit tools…</p></div></section>
 <script>window.__ARRAY_APP_KEY__=${JSON.stringify(cfg.arrayAppKey)};</script><script src="/js/credit-tools.js"></script>` });
 
-const admin = user => layout({ user, title: 'Admin — CreditFlex.ai', body: `
-<section class="wrap sect"><h2>Admin</h2>
-<p class="muted">Enrolls every member who has an Array ID in all CreditFlex products, one at a time. Safe to run more than once.</p>
+const admin = (user, rows = [], mailOn = false, mailTo = '') => layout({ user, title: 'Admin — CreditFlex.ai', body: `
+<section class="wrap sect"><h2>Enrolled members</h2>
+<p class="muted">${rows.length} enrolled. ${mailOn ? 'A daily summary email (about 8am Central) goes to ' + esc(mailTo) + '.' : 'Summary emails are OFF: set RESEND_API_KEY and EMAIL_FROM in Render.'}</p>
+<p><a class="btn" href="/admin/enrollments.csv">Download CSV</a> <button class="btn ghost" id="testmail">Send test email</button> <span class="muted small" id="mailout"></span></p>
+<div class="tablewrap"><table class="grid"><thead><tr><th>Enrolled</th><th>Name</th><th>Email</th><th>Products</th><th>Array user ID</th></tr></thead><tbody>
+${rows.map(e => `<tr><td>${esc(e.enrolled_at)}</td><td>${esc(e.name)}</td><td>${esc(e.email)}</td><td>${esc(e.enrollment_status || '')}${e.rejected ? ' <span class="muted small">(' + esc(e.rejected) + ')</span>' : ''}</td><td class="mono">${esc(e.array_user_id)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No enrolled members yet.</td></tr>'}
+</tbody></table></div>
+<h2 class="sub">Enroll existing members in all products</h2>
+<p class="muted">Enrolls every member who has an Array ID, one at a time. Safe to run more than once.</p>
 <p><button class="btn big" id="enroll">Enroll existing members</button></p>
 <pre class="card" id="out" style="white-space:pre-wrap;min-height:80px">Results will appear here.</pre></section>
 <script>
+function post(url) { return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(function (r) { return r.json(); }); }
 document.getElementById('enroll').addEventListener('click', function () {
   var out = document.getElementById('out'); out.textContent = 'Working…';
-  fetch('/api/array/enroll-existing', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-    .then(function (r) { return r.json(); })
-    .then(function (j) { out.textContent = JSON.stringify(j, null, 2); })
-    .catch(function () { out.textContent = 'Request failed. Check the Render logs.'; });
+  post('/api/array/enroll-existing').then(function (j) { out.textContent = JSON.stringify(j, null, 2); }).catch(function () { out.textContent = 'Request failed. Check the Render logs.'; });
+});
+document.getElementById('testmail').addEventListener('click', function () {
+  var o = document.getElementById('mailout'); o.textContent = 'Sending…';
+  post('/api/admin/test-email').then(function (j) { o.textContent = j.ok ? 'Sent to ' + j.sentTo + (j.summary && j.summary.sent ? ' (plus pending enrollments)' : '') : 'Failed: ' + (j.error || 'unknown'); }).catch(function () { o.textContent = 'Request failed.'; });
 });
 </script>` });
 

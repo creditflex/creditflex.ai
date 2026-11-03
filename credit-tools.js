@@ -73,7 +73,14 @@
     if (!d) return;
     var name = d.event || d.type || d.eventType || d.name;
     // Log which events arrive (names/keys only) so the server log shows what Array sends.
-    post('/api/array/event-log', { event: name, keys: Object.keys(d), metaKeys: Object.keys(d.metadata || {}) }).catch(function () {});
+    var info = { event: name, keys: Object.keys(d), metaKeys: Object.keys(d.metadata || {}) };
+    if (name === 'error' && d.metadata) { // include Array's own error text so it shows in the server log
+      var m = d.metadata, h;
+      try { h = JSON.stringify(m.bureauErrorHeaders); } catch (e) { h = ''; }
+      info.detail = { message: String(m.message || '').slice(0, 300), section: String(m['section-name'] || ''),
+        authMethod: String(m.authMethod || ''), bureau: String(m.bureau || ''), headers: String(h || '').slice(0, 300) };
+    }
+    post('/api/array/event-log', info).catch(function () {});
     if (name === 'enrollment-complete') {
       var id = enrolledUserId(d);
       if (id) post('/api/array/enrolled', { userId: id });

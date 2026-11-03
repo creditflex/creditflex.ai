@@ -5,9 +5,53 @@ const cfg = require('./config');
 const db = require('./db');
 const auth = require('./auth');
 const array = require('./array');
+const mail = require('./mail');
 const pages = require('./pages');
 
 const MIME = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.txt': 'text/plain' };
+
+// Startup check: say clearly in the log which required settings are missing.
+{
+  const missing = [];
+  if (!process.env.ARRAY_SERVER_TOKEN) missing.push('ARRAY_SERVER_TOKEN');
+  if (!cfg.proxyUrls.length) missing.push('PROXYMESH_URL or QUOTAGUARDSTATIC_URL');
+  if (cfg.isProd && cfg.sessionSecret === 'dev-only-secret-change-me') missing.push('SESSION_SECRET');
+  if (cfg.isProd && !cfg.adminEmail) missing.push('ADMIN_EMAIL');
+  if (!mail.configured()) console.warn('NOTE: daily enrollment summary emails are off until RESEND_API_KEY and EMAIL_FROM are set.');
+  if (missing.length) console.warn('WARNING: these required settings are missing:', missing.join(', '));
+}
+
+// Daily summary: one email per day (about 8am Central) listing members enrolled since the last summary.
+const SUMMARY_HOUR = Number(process.env.SUMMARY_HOUR || 8);
+const SUMMARY_TZ = process.env.SUMMARY_TZ || 'America/Chicago';
+const localParts = () => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: SUMMARY_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map(x => [x.type, x.value]));
+  return { date: p.year + '-' + p.month + '-' + p.day, hour: Number(p.hour) };
+};
+async function sendDailySummary(force) {
+  if (!mail.configured()) return { sent: false, reason: 'email not configured' };
+  const { date, hour } = localParts();
+  if (!force && (hour < SUMMARY_HOUR || db.getMeta('last_summary_date') === date)) return { sent: false, reason: 'not due' };
+  const rows = db.pendingEnrollments();
+  if (!force) db.setMeta('last_summary_date', date);
+  if (!rows.length) return { sent: false, reason: 'no new enrollments' };
+  const attention = rows.filter(r => r.enrollment_status !== 'All').length;
+  const lines = rows.map(r => `- ${clean(r.name)} <${clean(r.email)}>  enrolled ${clean(r.enrolled_at)} UTC  products: ${clean(r.enrollment_status)}${r.enrollment_status !== 'All' ? ' (needs attention)' : ''}  Array ID: ${clean(r.array_user_id)}`);
+  const text = `${rows.length} new CreditFlex enrollment${rows.length === 1 ? '' : 's'} since the last summary.` + (attention ? `\n${attention} need attention.` : '') + '\n\n' + lines.join('\n') + '\n\nFull list: https://creditflex.ai/admin';
+  try {
+    await mail.send(`CreditFlex daily summary: ${rows.length} new enrollment${rows.length === 1 ? '' : 's'}`, text);
+    db.markNotified(rows.map(r => r.array_user_id));
+    console.log('Daily summary sent:', rows.length, 'enrollments');
+    return { sent: true, count: rows.length };
+  } catch (e) {
+    if (!force) db.setMeta('last_summary_date', ''); // retry on the next check
+    console.error('Daily summary failed:', e.message);
+    return { sent: false, reason: e.message };
+  }
+}
+const clean = v => String(v == null ? '' : v).replace(/[\u0000-\u001f]/g, ' ').slice(0, 300);
+const isAdmin = u => !!(u && cfg.adminEmail && u.email === cfg.adminEmail);
+const csvCell = v => { let t = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
 
 const send = (res, status, body, type = 'text/html; charset=utf-8') => {
   res.writeHead(status, {
@@ -83,6 +127,11 @@ async function handle(req, res) {
         const safe = v => String(v).replace(/[^\w .:-]/g, '').slice(0, 60);
         console.log('Array event:', safe(b.event), '| detail keys:', (b.keys || []).slice(0, 15).map(safe).join(','),
           '| metadata keys:', (b.metaKeys || []).slice(0, 15).map(safe).join(','), '| member:', user.id);
+        if (b.detail && typeof b.detail === 'object') {
+          const t = v => String(v == null ? '' : v).replace(/[\u0000-\u001f]/g, ' ').slice(0, 300);
+          console.log('Array error detail:', 'message=' + t(b.detail.message), '| section=' + t(b.detail.section),
+            '| authMethod=' + t(b.detail.authMethod), '| bureau=' + t(b.detail.bureau), '| headers=' + t(b.detail.headers));
+        }
         return json(res, 200, { ok: true });
       }
       // GET /api/array/token -> POST array.io/api/authenticate/v2/usertoken via proxy
@@ -105,10 +154,26 @@ async function handle(req, res) {
         if (!aid) return json(res, 400, { error: 'userId is required' });
         db.setArrayUserId(user.id, aid);
         console.log('Array userId saved for member', user.id);
+        let r = null, err = null;
+        try { r = await array.enrollBatch(aid); }
+        catch (e) { err = e; console.error('Array enrollment error:', e.message); }
+        const status = err ? 'error' : (r.json && r.json.enrollmentStatus) || ('HTTP ' + r.status);
+        let rejected = '';
+        try { if (r && r.json && r.json.rejectedEnrollments) rejected = JSON.stringify(r.json.rejectedEnrollments).slice(0, 500); } catch (_) {}
+        db.recordEnrollment(user.id, aid, status, rejected);
+        if (err) return json(res, 502, { error: 'Enrollment request failed' });
+        return json(res, 200, r.json || { status: r.status });
+      }
+      // POST /api/admin/test-email (admin only): sends a test message to the notification address
+      if (req.method === 'POST' && p === '/api/admin/test-email') {
+        if (!isAdmin(user)) return json(res, 403, { error: 'Forbidden' });
+        await readJson(req);
         try {
-          const r = await array.enrollBatch(aid);
-          return json(res, 200, r.json || { status: r.status });
-        } catch (e) { console.error('Array enrollment error:', e.message); return json(res, 502, { error: 'Enrollment request failed' }); }
+          await mail.send('CreditFlex test email', 'This is a test. The daily enrollment summary will be sent to this address.');
+          const sum = await sendDailySummary(true); // also sends any pending enrollments now
+          return json(res, 200, { ok: true, sentTo: cfg.mail.to, summary: sum });
+        }
+        catch (e) { console.error('Test email failed:', e.message); return json(res, 502, { error: e.message }); }
       }
       // POST /api/array/enroll-existing (admin only): one-time enrollment, one user at a time
       if (req.method === 'POST' && p === '/api/array/enroll-existing') {
@@ -137,6 +202,14 @@ async function handle(req, res) {
   if (p === '/') return send(res, 200, pages.home(user));
   if (p === '/pricing') return send(res, 200, pages.pricing(user));
   if (p === '/login' || p === '/sign-up') return user ? redirect(res, '/dashboard') : send(res, 200, pages.authPage(p.slice(1), null));
+  if (p === '/admin/enrollments.csv') {
+    if (!isAdmin(user)) return redirect(res, '/');
+    const head = ['enrolled_at', 'email', 'name', 'array_user_id', 'enrollment_status', 'rejected_products'];
+    const rows = db.listEnrollments().map(e => [e.enrolled_at, e.email, e.name, e.array_user_id, e.enrollment_status, e.rejected].map(csvCell).join(','));
+    res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="creditflex-enrollments.csv"', 'Cache-Control': 'no-store' });
+    return res.end([head.join(',')].concat(rows).join('\r\n'));
+  }
+  if (p === '/admin') return isAdmin(user) ? send(res, 200, pages.admin(user, db.listEnrollments(), mail.configured(), cfg.mail.to)) : redirect(res, '/');
   if (p === '/dashboard') return user ? send(res, 200, pages.dashboard(user)) : redirect(res, '/login');
   if (p === '/credit-dashboard') return user ? send(res, 200, pages.creditTools(user)) : redirect(res, '/login');
   if (p === '/credit-tools-v2') return user ? send(res, 200, pages.creditTools(user)) : redirect(res, '/login');
@@ -150,3 +223,4 @@ async function handle(req, res) {
 
 http.createServer((req, res) => handle(req, res).catch(e => { console.error(e); if (!res.headersSent) send(res, 500, 'Server error', 'text/plain'); }))
   .listen(cfg.port, () => console.log(`CreditFlex listening on :${cfg.port}`));
+setInterval(() => sendDailySummary(false).catch(e => console.error('Summary check failed:', e.message)), 10 * 60 * 1000).unref();

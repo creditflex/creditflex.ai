@@ -20,5 +20,12 @@ module.exports = {
     ? process.env.PROXY_URLS.split(',')
     : [process.env.PROXYMESH_URL, process.env.QUOTAGUARDSTATIC_URL, process.env.PROXY_URL]
   ).map(s => (s || '').trim()).filter(Boolean),
+  // Enrollment notification emails (sent through Resend's HTTPS API; no SMTP ports needed)
+  mail: {
+    apiKey: process.env.RESEND_API_KEY || '',
+    from: (process.env.EMAIL_FROM || '').trim(),
+    to: (process.env.NOTIFY_EMAIL || 'support@creditflex.ai').trim(),
+    apiUrl: process.env.EMAIL_API_URL || 'https://api.resend.com/emails',
+  },
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
 };
