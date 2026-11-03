@@ -87,16 +87,15 @@ exports.postJson = async (url, headers, body) => {
 exports.probe = async (url, headers, body) => {
   const data = JSON.stringify(body);
   const out = [];
-  if (!cfg.proxyUrls.length) return [{ proxy: '(none configured)', ok: false, detail: 'No proxy URL is set in Render Environment' }];
-  for (const proxyUrl of cfg.proxyUrls) {
-    const name = hostOf(proxyUrl);
+  if (!cfg.proxySources.length) return [{ proxy: '(none configured)', ok: false, detail: 'No proxy setting was found in Render Environment (PROXYMESH_URL / QUOTAGUARDSTATIC_URL)' }];
+  for (const src of cfg.proxySources) {
+    const notes = src.problems.length ? ' Notes: ' + src.problems.join('; ') + '.' : '';
+    if (!src.valid) { out.push({ proxy: src.label, ok: false, detail: 'This value is not a valid proxy URL. Expected http://USERNAME:PASSWORD@HOST:PORT.' + notes }); continue; }
+    const name = src.label + ' (' + hostOf(src.url) + ')';
     try {
-      new URL(proxyUrl);
-    } catch (_) { out.push({ proxy: name, ok: false, detail: 'The saved proxy URL is not a valid URL. Expected http://USERNAME:PASSWORD@HOST:PORT' }); continue; }
-    try {
-      const r = await requestOnce(url, headers, data, agentFor(proxyUrl));
-      out.push({ proxy: name, ok: true, status: r.status, hasToken: !!(r.json && r.json.userToken), detail: r.status === 200 ? 'Array answered and issued a token' : 'Array answered with HTTP ' + r.status + ' ' + String(r.text).slice(0, 200) });
-    } catch (e) { out.push({ proxy: name, ok: false, detail: String(e.message).replace(/\/\/[^@\s]*@/g, '//***@') }); }
+      const r = await requestOnce(url, headers, data, agentFor(src.url));
+      out.push({ proxy: name, ok: true, status: r.status, hasToken: !!(r.json && r.json.userToken), detail: (r.status === 200 ? 'Array answered and issued a token.' : 'Array answered with HTTP ' + r.status + ' ' + String(r.text).slice(0, 200)) + notes });
+    } catch (e) { out.push({ proxy: name, ok: false, detail: String(e.message).replace(/\/\/[^@\s]*@/g, '//***@') + notes }); }
   }
   return out;
 };
