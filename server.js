@@ -197,9 +197,10 @@ async function handle(req, res) {
           try {
             const r = await array.enrollBatch(u.array_user_id);
             const st = r.json && r.json.enrollmentStatus;
+            db.recordEnrollment(u.id, u.array_user_id, st || ('HTTP ' + r.status), r.json && r.json.rejectedEnrollments ? JSON.stringify(r.json.rejectedEnrollments).slice(0, 500) : '');
             if (st === 'All') summary.all++;
             else summary.issues.push({ email: u.email, enrollmentStatus: st || `HTTP ${r.status}`, rejectedEnrollments: r.json && r.json.rejectedEnrollments });
-          } catch (e) { summary.issues.push({ email: u.email, enrollmentStatus: 'error', error: e.message }); }
+          } catch (e) { db.recordEnrollment(u.id, u.array_user_id, 'error', ''); summary.issues.push({ email: u.email, enrollmentStatus: 'error', error: e.message }); }
         }
         return json(res, 200, summary);
       }
