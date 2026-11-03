@@ -82,3 +82,21 @@ exports.postJson = async (url, headers, body) => {
   }
   throw lastErr;
 };
+
+// Admin diagnostic: tries each configured proxy on its own and reports what happened (never shows credentials).
+exports.probe = async (url, headers, body) => {
+  const data = JSON.stringify(body);
+  const out = [];
+  if (!cfg.proxyUrls.length) return [{ proxy: '(none configured)', ok: false, detail: 'No proxy URL is set in Render Environment' }];
+  for (const proxyUrl of cfg.proxyUrls) {
+    const name = hostOf(proxyUrl);
+    try {
+      new URL(proxyUrl);
+    } catch (_) { out.push({ proxy: name, ok: false, detail: 'The saved proxy URL is not a valid URL. Expected http://USERNAME:PASSWORD@HOST:PORT' }); continue; }
+    try {
+      const r = await requestOnce(url, headers, data, agentFor(proxyUrl));
+      out.push({ proxy: name, ok: true, status: r.status, hasToken: !!(r.json && r.json.userToken), detail: r.status === 200 ? 'Array answered and issued a token' : 'Array answered with HTTP ' + r.status + ' ' + String(r.text).slice(0, 200) });
+    } catch (e) { out.push({ proxy: name, ok: false, detail: String(e.message).replace(/\/\/[^@\s]*@/g, '//***@') }); }
+  }
+  return out;
+};

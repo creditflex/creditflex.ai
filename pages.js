@@ -109,6 +109,10 @@ const admin = (user, rows = [], mailOn = false, mailTo = '') => layout({ user, t
 <div class="tablewrap"><table class="grid"><thead><tr><th>Enrolled</th><th>Name</th><th>Email</th><th>Products</th><th>Array user ID</th></tr></thead><tbody>
 ${rows.map(e => `<tr><td>${esc(e.enrolled_at)}</td><td>${esc(e.name)}</td><td>${esc(e.email)}</td><td>${esc(e.enrollment_status || '')}${e.rejected ? ' <span class="muted small">(' + esc(e.rejected) + ')</span>' : ''}</td><td class="mono">${esc(e.array_user_id)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No enrolled members yet.</td></tr>'}
 </tbody></table></div>
+<h2 class="sub">Check the Array connection</h2>
+<p class="muted">Tests each proxy (ProxyMesh, QuotaGuard) against Array's token service. Use this if members see "We couldn't reach your credit tools."</p>
+<p><button class="btn ghost" id="testarray">Test Array connection</button></p>
+<pre class="card" id="arrout" style="white-space:pre-wrap;min-height:60px">Results will appear here.</pre>
 <h2 class="sub">Enroll existing members in all products</h2>
 <p class="muted">Enrolls every member who has an Array ID, one at a time. Safe to run more than once.</p>
 <p><button class="btn big" id="enroll">Enroll existing members</button></p>
@@ -118,6 +122,15 @@ function post(url) { return fetch(url, { method: 'POST', credentials: 'same-orig
 document.getElementById('enroll').addEventListener('click', function () {
   var out = document.getElementById('out'); out.textContent = 'Working…';
   post('/api/array/enroll-existing').then(function (j) { out.textContent = JSON.stringify(j, null, 2); }).catch(function () { out.textContent = 'Request failed. Check the Render logs.'; });
+});
+document.getElementById('testarray').addEventListener('click', function () {
+  var o = document.getElementById('arrout'); o.textContent = 'Testing…';
+  post('/api/admin/test-array').then(function (j) {
+    if (j.error) { o.textContent = 'Error: ' + j.error; return; }
+    var t = 'Server token set: ' + j.tokenSetting + '\nApp key set: ' + j.appKeySet + '\nTested with: ' + (j.usingOwnMember ? 'your own member record' : 'a dummy user (a 4xx answer from Array still proves the connection works)') + '\n';
+    j.results.forEach(function (r) { t += '\n' + (r.ok ? 'OK    ' : 'FAIL  ') + r.proxy + '\n      ' + r.detail + '\n'; });
+    o.textContent = t;
+  }).catch(function () { o.textContent = 'Request failed. Check the Render logs.'; });
 });
 document.getElementById('testmail').addEventListener('click', function () {
   var o = document.getElementById('mailout'); o.textContent = 'Sending…';

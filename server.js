@@ -167,6 +167,16 @@ async function handle(req, res) {
         if (err) return json(res, 502, { error: 'Enrollment request failed' });
         return json(res, 200, r.json || { status: r.status });
       }
+      // POST /api/admin/test-array (admin only): checks each proxy and Array's token service with your own member record
+      if (req.method === 'POST' && p === '/api/admin/test-array') {
+        if (!isAdmin(user)) return json(res, 403, { error: 'Forbidden' });
+        await readJson(req);
+        try {
+          const usingOwn = !!user.array_user_id;
+          const results = await array.probe(user.array_user_id || 'diagnostic-test-user');
+          return json(res, 200, { usingOwnMember: usingOwn, tokenSetting: !!process.env.ARRAY_SERVER_TOKEN, appKeySet: !!cfg.arrayAppKey, results });
+        } catch (e) { return json(res, 200, { error: e.message }); }
+      }
       // POST /api/admin/test-email (admin only): sends a test message to the notification address
       if (req.method === 'POST' && p === '/api/admin/test-email') {
         if (!isAdmin(user)) return json(res, 403, { error: 'Forbidden' });

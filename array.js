@@ -28,6 +28,14 @@ exports.getUserToken = arrayUserId =>
     { appKey: cfg.arrayAppKey, userId: arrayUserId, ttlInMinutes: '60' }
   );
 
+// Diagnostic: tries every proxy separately with a real token request.
+exports.probe = arrayUserId =>
+  require('./proxy').probe(
+    'https://array.io/api/authenticate/v2/usertoken',
+    { 'x-array-server-token': serverToken() },
+    { appKey: cfg.arrayAppKey, userId: arrayUserId, ttlInMinutes: '5' }
+  );
+
 // POST https://array.io/api/monitoring/v2/batch (through the proxy)
 exports.enrollBatch = async arrayUserId => {
   const r = await postJson(
