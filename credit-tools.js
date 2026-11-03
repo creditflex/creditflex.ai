@@ -63,15 +63,14 @@
   function enrolledUserId(d) {
     var cu = d.metadata && d.metadata.createdUsers;
     if (!cu) return null;
-    var u = cu[APP_KEY];
-    if (!u) { var k = Object.keys(cu)[0]; u = k ? cu[k] : null; } // fall back to the first created user
+    var u = cu[APP_KEY]; // metadata.createdUsers[<appKey>].userId, exactly as Array documents it
     return u && u.userId ? u.userId : null;
   }
 
   function onArrayEvent(event) {
     var d = event && event.detail;
     if (!d) return;
-    var name = d.event || d.type || d.eventType || d.name;
+    var name = d.event; // event.detail.event
     // Log which events arrive (names/keys only) so the server log shows what Array sends.
     var info = { event: name, keys: Object.keys(d), metaKeys: Object.keys(d.metadata || {}) };
     if (name === 'error' && d.metadata) { // include Array's own error text so it shows in the server log
@@ -99,5 +98,6 @@
 
   window.addEventListener('array-event', onArrayEvent);
   window.addEventListener('pagehide', function () { window.removeEventListener('array-event', onArrayEvent); });
+  window.addEventListener('pageshow', function (e) { if (e.persisted) window.addEventListener('array-event', onArrayEvent); }); // back/forward cache restore
   start();
 })();
