@@ -40,7 +40,7 @@ function normalizeProxy(raw) {
 }
 const proxyEnv = process.env.PROXY_URLS
   ? process.env.PROXY_URLS.split(',').map((s, i) => ['PROXY_URLS #' + (i + 1), s])
-  : [['PROXYMESH_URL', process.env.PROXYMESH_URL], ['QUOTAGUARDSTATIC_URL', process.env.QUOTAGUARDSTATIC_URL], ['PROXY_URL', process.env.PROXY_URL]];
+  : [['QUOTAGUARDSTATIC_URL', process.env.QUOTAGUARDSTATIC_URL], ['PROXYMESH_URL', process.env.PROXYMESH_URL], ['PROXY_URL', process.env.PROXY_URL]];
 const proxySources = proxyEnv.filter(([, v]) => (v || '').trim()).map(([label, v]) => Object.assign({ label }, normalizeProxy(v)));
 proxySources.forEach(p => { if (!p.valid || p.problems.length) console.warn(`Proxy setting ${p.label}: ${p.valid ? 'adjusted' : 'NOT a valid URL'} (${p.problems.join('; ') || 'unreadable'})`); });
 
@@ -50,7 +50,7 @@ module.exports = {
   sessionSecret: process.env.SESSION_SECRET || (process.env.NODE_ENV === 'production' ? require('crypto').randomBytes(32).toString('hex') : 'dev-only-secret-change-me'),
   arrayAppKey: process.env.ARRAY_APP_KEY || 'F22B34C8-260F-4DEF-AB23-8876B4262C51',
 // Ordered list of outbound proxies; the first is tried first, the rest are failovers.
-  // Set PROXY_URLS (comma-separated), or PROXYMESH_URL and/or QUOTAGUARDSTATIC_URL (ProxyMesh is tried first).
+  // Set PROXY_URLS (comma-separated), or PROXYMESH_URL and/or QUOTAGUARDSTATIC_URL (QuotaGuard is tried first, then ProxyMesh).
   proxySources,
   proxyUrls: proxySources.map(p => p.url),
   // Enrollment notification emails (sent through Resend's HTTPS API; no SMTP ports needed)
