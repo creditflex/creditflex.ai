@@ -63,23 +63,39 @@ function requestOnce(url, headers, data, agent) {
   });
 }
 
-// Tries each configured proxy in order. Fails over only when the proxy or network fails
-// (no response from Array); any HTTP response from Array, including errors, is returned as-is.
+// Tries the configured proxies in order, remembering the one that worked last so it goes first next time.
+// Fails over when the proxy or network fails, AND when Array answers 403: Array returns 403 when the call comes
+// from an IP address it has not approved, and the next proxy may use an approved one. Any other answer
+// from Array (200, 400, 401...) is returned as-is. If every proxy gets a 403, the last 403 is returned.
+let doRequest = requestOnce; // replaced only by tests
+exports._setRequester = f => { doRequest = f; };
+let preferred = 0;
 exports.postJson = async (url, headers, body) => {
   const data = JSON.stringify(body);
   if (!cfg.proxyUrls.length) {
     if (cfg.isProd) throw new Error('No proxy configured (PROXYMESH_URL / QUOTAGUARDSTATIC_URL); refusing to call Array without a whitelisted proxy');
-    return requestOnce(url, headers, data, undefined); // local development only
+    return doRequest(url, headers, data, undefined); // local development only
   }
-  let lastErr;
-  for (const proxyUrl of cfg.proxyUrls) {
+  const n = cfg.proxyUrls.length;
+  let lastErr, lastResp;
+  for (let k = 0; k < n; k++) {
+    const i = (preferred + k) % n;
+    const proxyUrl = cfg.proxyUrls[i];
     try {
-      return await requestOnce(url, headers, data, agentFor(proxyUrl));
+      const r = await doRequest(url, headers, data, agentFor(proxyUrl));
+      if (r.status === 403 && k < n - 1) {
+        lastResp = r;
+        console.error(`Proxy ${hostOf(proxyUrl)}: Array answered 403 (IP not approved or bad token); trying next`);
+        continue;
+      }
+      if (r.status !== 403) preferred = i;
+      return r;
     } catch (e) {
       lastErr = e;
       console.error(`Proxy ${hostOf(proxyUrl)} failed (${e.message}); trying next`);
     }
   }
+  if (lastResp) return lastResp;
   throw lastErr;
 };
 
