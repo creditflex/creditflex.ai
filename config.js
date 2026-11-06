@@ -70,5 +70,11 @@ module.exports = {
     verifyCents: Number(process.env.PRICE_VERIFY_CENTS || 100),
     trialDays: Number(process.env.TRIAL_DAYS || 7),
   },
+  affiliate: {
+    commissionCents: Number(process.env.AFFILIATE_COMMISSION_CENTS || 500), // per paid month, per referred premium member
+    holdDays: Number(process.env.AFFILIATE_HOLD_DAYS || 30),               // refund / chargeback window before a commission is payable
+    minPayoutCents: Number(process.env.AFFILIATE_MIN_PAYOUT_CENTS || 2500),
+    cookieDays: Number(process.env.AFFILIATE_COOKIE_DAYS || 60),
+  },
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
 };

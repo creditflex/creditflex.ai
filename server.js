@@ -86,7 +86,6 @@ const STATIC_PAGES = {
   '/loans': ['Loans', 'Loan offers are coming soon.'],
   '/about': ['About', 'CreditFlex.ai helps everyday consumers monitor and understand their credit.'],
   '/contact': ['Contact', 'Questions? Email support@creditflex.ai.'],
-  '/affiliate': ['Affiliate Program', 'Our affiliate program details are coming soon.'],
   '/privacy': ['Privacy Policy', 'Replace this placeholder with your reviewed privacy policy before launch.'],
   '/terms': ['Terms of Use', 'Replace this placeholder with your reviewed terms of use before launch.'],
   '/security': ['Security', 'Replace this placeholder with your security statement before launch.'],
@@ -109,6 +108,24 @@ function applySubscription(sub, userIdHint) {
   });
   console.log('Billing updated for member', u.id, '->', sub.status);
 }
+// ---------- Affiliates ----------
+const getCookie = (req, name) => { const m = (req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`)); return m ? decodeURIComponent(m[1]) : ''; };
+const addCookie = (res, line) => { const prev = res.getHeader('Set-Cookie'); res.setHeader('Set-Cookie', prev ? [].concat(prev, line) : line); };
+const REF_COOKIE = 'cf_ref';
+const cleanCode = v => { const c = String(v || '').trim().toLowerCase(); return /^[a-z0-9]{4,20}$/.test(c) ? c : ''; };
+const newCode = () => { for (let i = 0; i < 20; i++) { const c = require('crypto').randomBytes(5).toString('hex').slice(0, 8); if (!db.affiliateByCode(c)) return c; } throw new Error('Could not make a code'); };
+const money = c => (c < 0 ? '-' : '') + '$' + (Math.abs(c) / 100).toFixed(2);
+// A commission is earned each time a referred member's recurring $29 invoice is actually paid.
+// The trial and the $1 card confirmation are not renewals, so they never earn one.
+function recordCommission(inv) {
+  if (!inv || inv.billing_reason !== 'subscription_cycle' || !(inv.amount_paid > 0) || !inv.id) return;
+  const cust = typeof inv.customer === 'string' ? inv.customer : inv.customer && inv.customer.id;
+  const member = cust && db.byStripeCustomer(cust);
+  if (!member || !member.referred_by_affiliate_id) return;
+  const aff = db.affiliateById(member.referred_by_affiliate_id);
+  if (!aff || aff.status === 'suspended' || aff.user_id === member.id) return;
+  if (db.addCommission(aff.id, member.id, inv.id, cfg.affiliate.commissionCents, cfg.affiliate.holdDays)) console.log('Commission recorded for partner', aff.id);
+}
 const readRaw = req => new Promise((resolve, reject) => {
   let n = 0; const chunks = [];
   req.on('data', c => { n += c.length; if (n > 1e6) { req.destroy(); reject(new Error('Too large')); } else chunks.push(c); });
@@ -128,6 +145,17 @@ async function handle(req, res) {
   // Sliding inactivity timeout: every request from a signed-in member renews the cookie's activity time.
   if (user && p !== '/api/logout') auth.setSession(res, user.id);
 
+  // ---------- Referral links: /r/CODE or any page with ?ref=CODE (cookie lasts 60 days, newest link wins) ----------
+  if (req.method === 'GET') {
+    const refCode = p.startsWith('/r/') ? cleanCode(p.slice(3)) : cleanCode(url.searchParams.get('ref'));
+    const aff = refCode && db.affiliateByCode(refCode);
+    if (aff && aff.status !== 'suspended') {
+      db.incClicks(aff.id);
+      addCookie(res, `${REF_COOKIE}=${aff.code}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${cfg.affiliate.cookieDays * 86400}${cfg.isProd ? '; Secure' : ''}`);
+    }
+    if (p.startsWith('/r/')) return redirect(res, '/');
+  }
+
   // ---------- Stripe webhook (raw body needed to check the signature) ----------
   if (req.method === 'POST' && p === '/webhooks/stripe') {
     const raw = await readRaw(req).catch(() => null);
@@ -140,6 +168,8 @@ async function handle(req, res) {
         applySubscription(sub, obj.client_reference_id);
       } else if (/^customer\.subscription\.(created|updated|deleted)$/.test(ev.type)) {
         applySubscription(obj);
+      } else if (ev.type === 'invoice.paid') {
+        recordCommission(obj);
       }
     } catch (e) { console.error('Stripe webhook handling failed:', e.message); return send(res, 500, 'Error', 'text/plain'); } // Stripe retries on 5xx
     return send(res, 200, 'ok', 'text/plain');
@@ -156,6 +186,7 @@ async function handle(req, res) {
         if (db.byEmail(email)) return json(res, 409, { error: 'An account with that email already exists.' });
         const id = db.create(email, name.slice(0, 100), auth.hashPassword(pw));
         auth.setSession(res, id);
+        { const ref = cleanCode(getCookie(req, REF_COOKIE)); const aff = ref && db.affiliateByCode(ref); if (aff && aff.status !== 'suspended' && aff.user_id !== id) db.setReferredBy(id, aff.id); }
         return json(res, 200, { ok: true });
       }
       if (req.method === 'POST' && p === '/api/login') {
@@ -232,6 +263,45 @@ async function handle(req, res) {
         if (err) return json(res, 502, { error: 'Enrollment request failed' });
         return json(res, 200, r.json || { status: r.status });
       }
+      // POST /api/affiliate/join: a logged-in member applies to the affiliate program (an admin approves)
+      if (req.method === 'POST' && p === '/api/affiliate/join') {
+        const b = await readJson(req);
+        const method = String(b.payoutMethod || '').trim().slice(0, 120);
+        if (!b.agree) return json(res, 400, { error: 'Please accept the affiliate terms.' });
+        if (!method) return json(res, 400, { error: 'Enter the PayPal email (or other payout details) where we should send your commissions.' });
+        const existing = db.affiliateByUser(user.id);
+        if (existing) { db.setAffiliatePayoutMethod(existing.id, method); return json(res, 200, { ok: true, status: existing.status }); }
+        db.createAffiliate(user.id, newCode(), method);
+        console.log('New affiliate application from member', user.id);
+        return json(res, 200, { ok: true, status: 'pending' });
+      }
+      // Admin-only affiliate actions
+      if (p.startsWith('/api/admin/affiliate') || p === '/api/admin/commission/void') {
+        if (!isAdmin(user)) return json(res, 403, { error: 'Forbidden' });
+        const b = await readJson(req);
+        const id = Number(b.id);
+        if (p === '/api/admin/affiliate/status') {
+          if (!['approved', 'suspended', 'pending'].includes(b.status) || !db.affiliateById(id)) return json(res, 400, { error: 'Bad request' });
+          db.setAffiliateStatus(id, b.status); return json(res, 200, { ok: true });
+        }
+        if (p === '/api/admin/affiliate/w9') { if (!db.affiliateById(id)) return json(res, 400, { error: 'Bad request' }); db.setAffiliateW9(id, !!b.value); return json(res, 200, { ok: true }); }
+        if (p === '/api/admin/affiliate/payout') {
+          const a = db.affiliateById(id);
+          if (!a) return json(res, 400, { error: 'Bad request' });
+          if (a.status !== 'approved') return json(res, 400, { error: 'Only approved partners can be paid.' });
+          const reference = String(b.reference || '').trim().slice(0, 120);
+          if (!reference) return json(res, 400, { error: 'Enter the payment reference (for example the PayPal transaction ID).' });
+          const wouldTotal = db.affiliateYearPaidCents(id) + a.payable_cents;
+          if (wouldTotal >= 60000 && !a.w9_on_file) return json(res, 400, { error: 'This partner is at $600 for the year. Get their W-9 and tick "W-9 on file" before paying.' });
+          const r = db.createPayout(id, a.payout_method, reference, String(b.note || '').slice(0, 200), cfg.affiliate.minPayoutCents);
+          if (!r.ok) return json(res, 400, { error: r.error });
+          console.log('Payout recorded for partner', id, r.total, 'cents');
+          return json(res, 200, { ok: true, total: money(r.total), count: r.count });
+        }
+        if (p === '/api/admin/commission/void') { const r = db.voidCommission(id, b.reason); return json(res, r.ok ? 200 : 400, r.ok ? r : { error: r.error }); }
+        return json(res, 404, { error: 'Not found' });
+      }
+
       // POST /api/admin/test-array (admin only): checks each proxy and Array's token service with your own member record
       if (req.method === 'POST' && p === '/api/admin/test-array') {
         if (!isAdmin(user)) return json(res, 403, { error: 'Forbidden' });
@@ -294,6 +364,25 @@ async function handle(req, res) {
       } catch (e) { console.error('Stripe success sync failed (the webhook will catch up):', e.message); }
     }
     return redirect(res, '/dashboard?welcome=1');
+  }
+  if (p === '/affiliate') return send(res, 200, pages.affiliate(user, user ? db.affiliateByUser(user.id) : null));
+  if (p === '/affiliate/dashboard') {
+    if (!user) return redirect(res, '/login');
+    const a = db.affiliateByUser(user.id);
+    if (!a) return redirect(res, '/affiliate');
+    return send(res, 200, pages.affiliateDashboard(user, a, db.listCommissions(a.id, 100), db.listPayouts(a.id)));
+  }
+  if (p === '/admin/affiliates') {
+    if (!isAdmin(user)) return redirect(res, '/');
+    return send(res, 200, pages.adminAffiliates(user, db.listAffiliates(), db.listCommissions(null, 100), db.listPayouts(null)));
+  }
+  if (p === '/admin/payouts.csv') {
+    if (!isAdmin(user)) return redirect(res, '/');
+    const head = ['partner_email', 'partner_name', 'payout_method', 'amount_due_usd', 'w9_on_file'];
+    const rows = db.listAffiliates().filter(a => a.status === 'approved' && a.payable_cents >= cfg.affiliate.minPayoutCents)
+      .map(a => [a.email, a.name, a.payout_method, (a.payable_cents / 100).toFixed(2), a.w9_on_file ? 'yes' : 'no'].map(csvCell).join(','));
+    res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="creditflex-payouts-due.csv"', 'Cache-Control': 'no-store' });
+    return res.end([head.join(',')].concat(rows).join('\r\n'));
   }
   if (p === '/admin/enrollments.csv') {
     if (!isAdmin(user)) return redirect(res, '/');

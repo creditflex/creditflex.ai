@@ -118,6 +118,7 @@ const creditTools = user => layout({ user, title: 'Credit Dashboard — CreditFl
 const admin = (user, rows = [], mailOn = false, mailTo = '', stripeOn = false) => layout({ user, title: 'Admin — CreditFlex.ai', body: `
 <section class="wrap sect"><h2>Enrolled members</h2>
 <p class="muted">${rows.length} enrolled. ${mailOn ? 'A daily summary email (about 8am Central) goes to ' + esc(mailTo) + '.' : 'Summary emails are OFF: set RESEND_API_KEY and EMAIL_FROM in Render.'}</p>
+<p><a class="btn ghost" href="/admin/affiliates">Affiliate program</a></p>
 <p class="muted small">Billing (Stripe): ${stripeOn ? 'on' : 'OFF. Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render.'}</p>
 <p><a class="btn" href="/admin/enrollments.csv">Download CSV</a> <button class="btn ghost" id="testmail">Send test email</button> <span class="muted small" id="mailout"></span></p>
 <div class="tablewrap"><table class="grid"><thead><tr><th>Enrolled</th><th>Name</th><th>Email</th><th>Products</th><th>Billing</th><th>Array user ID</th></tr></thead><tbody>
@@ -152,6 +153,98 @@ document.getElementById('testmail').addEventListener('click', function () {
 });
 </script>` });
 
+// ---------- Affiliate program ----------
+const usd = c => (c < 0 ? '-' : '') + '$' + (Math.abs(c) / 100).toFixed(2);
+const COMM = usd(cfg.affiliate.commissionCents), HOLD = cfg.affiliate.holdDays, MINPAY = usd(cfg.affiliate.minPayoutCents);
+const refLink = a => `${cfg.stripe.siteUrl}/r/${a.code}`;
+
+const affiliate = (user, aff) => layout({ user, title: 'Affiliate Program — CreditFlex.ai', active: '', body: `
+<section class="wrap sect"><p class="eyebrow">Affiliate program</p>
+<h2>Earn ${COMM} every month for each premium member you refer</h2>
+<p class="muted lead2">Share your personal link. When someone you refer becomes a paying CreditFlex Premium member, you earn ${COMM} for every month they stay subscribed, for as long as they stay.</p>
+<div class="grid3 prods">
+<div class="card prod"><h3>1. Join free</h3><p class="muted">Create a CreditFlex account, then apply below. We review each application.</p></div>
+<div class="card prod"><h3>2. Share your link</h3><p class="muted">You get a personal link that tracks anyone who signs up within ${cfg.affiliate.cookieDays} days of clicking it.</p></div>
+<div class="card prod"><h3>3. Earn monthly</h3><p class="muted">${COMM} per referred member for each month their Premium payment goes through. Free trials and cancelled members do not earn commission.</p></div></div>
+<h2 class="sub">How payouts work</h2>
+<ul class="muted"><li>A commission becomes payable ${HOLD} days after the member's payment, to cover refunds and chargebacks. Refunded or disputed payments are removed.</li>
+<li>We send payouts once your payable balance reaches ${MINPAY}, by PayPal or the payout method you give us.</li>
+<li>Partners who earn $600 or more in a calendar year must provide a W-9 for tax reporting.</li></ul>
+<h2 class="sub">Program rules</h2>
+<ul class="muted"><li>No referring yourself or your own accounts.</li>
+<li>Clearly disclose that you earn a commission when you promote CreditFlex (required by the FTC).</li>
+<li>No misleading claims, no promises about credit score results, and no spam.</li>
+<li>We may suspend partners who break these rules and withhold commissions earned through violations.</li></ul>
+<div class="card" style="max-width:560px;margin:28px 0">
+${aff ? `<h3>You are in the program</h3><p class="muted">Status: <b>${esc(aff.status)}</b>${aff.status === 'pending' ? '. Your application is under review. Your link already tracks sign-ups, and commissions are paid once you are approved.' : ''}</p><p><a class="btn big" href="/affiliate/dashboard">Open partner dashboard</a></p>`
+: !user ? '<h3>Ready to join?</h3><p class="muted">Create a free CreditFlex account first, then come back to apply.</p><p><a class="btn big" href="/sign-up">Create an account</a> <a class="btn big ghost" href="/login">Log in</a></p>'
+: `<h3>Apply to the program</h3><form id="affiliate-join">
+<label class="lbl">PayPal email (or other payout details)<input name="payoutMethod" required maxlength="120" placeholder="you@example.com"></label>
+<label class="lbl chk"><input type="checkbox" name="agree" required> I agree to the program rules above and will disclose my affiliate relationship when I promote CreditFlex.</label>
+<p class="err" id="aff-err" role="alert"></p><button class="btn big" type="submit">Apply now</button></form>`}
+</div></section>` });
+
+const stat = (label, value) => `<div class="card prod"><p class="muted small">${label}</p><p class="price" style="font-size:2rem;margin:.2em 0">${value}</p></div>`;
+const STATE_LABEL = { pending: 'In hold period', payable: 'Payable', paid: 'Paid', void: 'Removed' };
+const affiliateDashboard = (user, a, comms, payouts) => layout({ user, title: 'Partner dashboard — CreditFlex.ai', active: '', body: `
+<section class="wrap sect"><p class="eyebrow">Partner dashboard</p><h2>Your referrals</h2>
+${a.status === 'pending' ? '<p class="card" style="max-width:640px">Your application is under review. Your link already tracks sign-ups, and your commissions are paid once you are approved.</p>' : ''}
+${a.status === 'suspended' ? '<p class="card" style="max-width:640px">Your partner account is suspended. Contact support@creditflex.ai.</p>' : ''}
+<p class="muted">Your personal link</p>
+<p><input class="linkbox" id="reflink" readonly value="${esc(refLink(a))}" onclick="this.select()"> <button class="btn ghost" type="button" id="copylink">Copy link</button></p>
+<p class="muted small">Anyone who clicks it and signs up within ${cfg.affiliate.cookieDays} days is credited to you.</p>
+<div class="grid3 prods">${stat('Link clicks', a.clicks)}${stat('Sign-ups', a.signups)}${stat('Active premium members', a.active_members)}
+${stat('In hold period', usd(a.pending_cents))}${stat('Payable now', usd(a.payable_cents))}${stat('Paid to date', usd(a.paid_cents))}</div>
+<p class="muted small">You earn ${COMM} per referred member for each paid month. Commissions become payable ${HOLD} days after payment. Payouts are sent once your payable balance reaches ${MINPAY}. For privacy, we never show you who your referred members are.</p>
+<h2 class="sub">Commission history</h2>
+<div class="tablewrap"><table class="grid"><thead><tr><th>Date</th><th>Amount</th><th>Status</th></tr></thead><tbody>
+${comms.map(c => `<tr><td>${esc(c.created_at)}</td><td>${usd(c.amount_cents)}</td><td>${STATE_LABEL[c.state] || ''}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No commissions yet.</td></tr>'}
+</tbody></table></div>
+<h2 class="sub">Payments sent to you</h2>
+<div class="tablewrap"><table class="grid"><thead><tr><th>Date</th><th>Amount</th><th>Method</th></tr></thead><tbody>
+${payouts.map(p => `<tr><td>${esc(p.paid_at)}</td><td>${usd(p.amount_cents)}</td><td>${esc(p.method)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No payouts yet.</td></tr>'}
+</tbody></table></div></section>` });
+
+const adminAffiliates = (user, affs, comms, payouts) => {
+  const approved = affs.filter(a => a.status === 'approved');
+  const totalPayable = approved.reduce((n, a) => n + (a.payable_cents >= cfg.affiliate.minPayoutCents ? a.payable_cents : 0), 0);
+  const pendingApps = affs.filter(a => a.status === 'pending').length;
+  return layout({ user, title: 'Affiliates — CreditFlex.ai', body: `
+<section class="wrap sect"><p><a href="/admin">&larr; Admin</a></p><h2>Affiliate program</h2>
+<p class="muted">${affs.length} partners, ${pendingApps} waiting for approval. Due for payout now (balance of ${MINPAY} or more): <b>${usd(totalPayable)}</b>. Commission: ${COMM} per paid month, payable after a ${HOLD}-day hold.</p>
+<p><a class="btn" href="/admin/payouts.csv">Download payouts due (CSV)</a> <span class="muted small" id="affout"></span></p>
+<div class="tablewrap"><table class="grid"><thead><tr><th>Partner</th><th>Code</th><th>Status</th><th>Payout details</th><th>Clicks</th><th>Sign-ups</th><th>Active</th><th>In hold</th><th>Payable</th><th>Paid</th><th>W-9</th><th>Actions</th></tr></thead><tbody>
+${affs.map(a => `<tr data-id="${a.id}"><td>${esc(a.name)}<br><span class="muted small">${esc(a.email)}</span></td><td class="mono">${esc(a.code)}</td><td>${esc(a.status)}</td><td>${esc(a.payout_method)}</td><td>${a.clicks}</td><td>${a.signups}</td><td>${a.active_members}</td><td>${usd(a.pending_cents)}</td><td><b>${usd(a.payable_cents)}</b></td><td>${usd(a.paid_cents)}</td>
+<td><input type="checkbox" class="w9" ${a.w9_on_file ? 'checked' : ''}></td>
+<td>${a.status !== 'approved' ? '<button class="btn ghost act" data-act="approved" type="button">Approve</button>' : '<button class="btn ghost act" data-act="suspended" type="button">Suspend</button>'}
+${a.status === 'approved' && a.payable_cents >= cfg.affiliate.minPayoutCents ? '<button class="btn act" data-act="payout" type="button">Record payout</button>' : ''}</td></tr>`).join('') || '<tr><td colspan="12" class="muted">No partners yet.</td></tr>'}
+</tbody></table></div>
+<p class="muted small">"Record payout" does not send money. Pay the partner yourself (PayPal, Zelle or ACH), then click it and enter the payment reference. It marks everything currently payable as paid.</p>
+<h2 class="sub">Recent commissions</h2>
+<div class="tablewrap"><table class="grid"><thead><tr><th>Date</th><th>Partner</th><th>Referred member</th><th>Amount</th><th>Status</th><th>Stripe invoice</th><th></th></tr></thead><tbody>
+${comms.map(c => `<tr data-cid="${c.id}"><td>${esc(c.created_at)}</td><td>${esc(c.affiliate_email)}</td><td>${esc(c.member_email || '')}</td><td>${usd(c.amount_cents)}</td><td>${STATE_LABEL[c.state] || ''}</td><td class="mono">${esc(c.stripe_invoice_id)}</td><td>${c.state !== 'void' && c.amount_cents > 0 ? '<button class="btn ghost voidc" type="button">Void</button>' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">No commissions yet.</td></tr>'}
+</tbody></table></div>
+<p class="muted small">Void a commission if the member's payment was refunded or disputed. Voiding one that was already paid creates a negative adjustment that comes off the partner's next payout.</p>
+<h2 class="sub">Payout history</h2>
+<div class="tablewrap"><table class="grid"><thead><tr><th>Date</th><th>Partner</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead><tbody>
+${payouts.map(p => `<tr><td>${esc(p.paid_at)}</td><td>${esc(p.affiliate_email)}</td><td>${usd(p.amount_cents)}</td><td>${esc(p.method)}</td><td class="mono">${esc(p.reference)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No payouts yet.</td></tr>'}
+</tbody></table></div></section>
+<script>
+function ap(url, body) { return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); }); }
+function done(x) { if (x.ok) location.reload(); else alert(x.j.error || 'Something went wrong'); }
+document.querySelectorAll('button.act').forEach(function (b) { b.addEventListener('click', function () {
+  var id = Number(b.closest('tr').dataset.id), act = b.dataset.act;
+  if (act === 'payout') { var ref = prompt('Payment reference (for example the PayPal transaction ID):'); if (!ref) return; ap('/api/admin/affiliate/payout', { id: id, reference: ref }).then(done); }
+  else ap('/api/admin/affiliate/status', { id: id, status: act }).then(done);
+}); });
+document.querySelectorAll('input.w9').forEach(function (c) { c.addEventListener('change', function () { ap('/api/admin/affiliate/w9', { id: Number(c.closest('tr').dataset.id), value: c.checked }).then(function (x) { if (!x.ok) alert(x.j.error || 'Failed'); }); }); });
+document.querySelectorAll('button.voidc').forEach(function (b) { b.addEventListener('click', function () {
+  var reason = prompt('Why is this commission being voided? (refund, chargeback, fraud...)'); if (reason === null) return;
+  ap('/api/admin/commission/void', { id: Number(b.closest('tr').dataset.cid), reason: reason }).then(done);
+}); });
+</script>` });
+};
+
 const simple = (user, title, text) => layout({ user, title: `${title} — CreditFlex.ai`, body: `<section class="wrap sect"><h2>${esc(title)}</h2><p class="muted">${esc(text)}</p></section>` });
 
-module.exports = { home, pricing, authPage, dashboard, creditTools, admin, simple };
+module.exports = { home, pricing, authPage, dashboard, creditTools, admin, affiliate, affiliateDashboard, adminAffiliates, simple };

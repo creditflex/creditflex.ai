@@ -22,6 +22,21 @@
   }
   billingBtn('start-trial', '/api/billing/checkout', 'trial-err');
   billingBtn('manage-billing', '/api/billing/portal', 'bill-err');
+  var af = document.getElementById('affiliate-join');
+  if (af) af.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var err = document.getElementById('aff-err'); err.textContent = '';
+    var d = Object.fromEntries(new FormData(af));
+    fetch('/api/affiliate/join', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ payoutMethod: d.payoutMethod, agree: !!d.agree }) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (x) { if (x.ok) location.reload(); else err.textContent = x.j.error || 'Something went wrong'; })
+      .catch(function () { err.textContent = 'Network error, please try again'; });
+  });
+  var cl = document.getElementById('copylink');
+  if (cl) cl.addEventListener('click', function () {
+    var box = document.getElementById('reflink'); box.select();
+    try { navigator.clipboard.writeText(box.value).then(function () { cl.textContent = 'Copied'; }); } catch (e) { document.execCommand('copy'); cl.textContent = 'Copied'; }
+  });
   var lo = document.getElementById('logout');
   if (lo) lo.addEventListener('click', function (e) {
     e.preventDefault();

@@ -123,3 +123,8 @@ table.grid{width:100%;border-collapse:collapse;font-size:.92rem}
 table.grid th,table.grid td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
 table.grid th{color:var(--muted);font-weight:600}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.82rem}
+
+.lbl{display:block;margin:14px 0;font-weight:600;font-size:.9rem}
+.lbl input[type=text],.lbl input:not([type]){width:100%;margin-top:6px;padding:13px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:1rem}
+.lbl.chk{font-weight:400;display:flex;gap:10px;align-items:flex-start}.lbl.chk input{margin-top:5px}
+.linkbox{width:100%;max-width:560px;padding:13px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:1rem}
