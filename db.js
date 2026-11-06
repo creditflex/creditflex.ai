@@ -29,7 +29,22 @@ INSERT OR IGNORE INTO enrollments (user_id, array_user_id, enrollment_status, en
   SELECT id, array_user_id, 'unknown', created_at, datetime('now') FROM users
   WHERE array_user_id IS NOT NULL AND array_user_id <> '';
 `);
+// Billing columns. Members who existed before billing was added are marked 'comped' (free access) once.
+{
+  const cols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+  if (!cols.includes('billing_status')) {
+    for (const c of ['billing_status', 'stripe_customer_id', 'stripe_subscription_id', 'trial_end', 'period_end']) db.exec(`ALTER TABLE users ADD COLUMN ${c} TEXT`);
+    db.exec("UPDATE users SET billing_status = 'comped'");
+  }
+}
+const BILLING_FIELDS = ['billing_status', 'stripe_customer_id', 'stripe_subscription_id', 'trial_end', 'period_end'];
 module.exports = {
+  hasAccess: u => !!u && ['trialing', 'active', 'comped'].includes(u.billing_status),
+  setBilling: (id, f) => {
+    const keys = Object.keys(f).filter(k => BILLING_FIELDS.includes(k));
+    if (keys.length) db.prepare(`UPDATE users SET ${keys.map(k => k + ' = ?').join(', ')} WHERE id = ?`).run(...keys.map(k => f[k]), id);
+  },
+  byStripeCustomer: cid => db.prepare('SELECT * FROM users WHERE stripe_customer_id = ?').get(cid),
   byEmail: e => db.prepare('SELECT * FROM users WHERE email = ?').get(e),
   byId: id => db.prepare('SELECT * FROM users WHERE id = ?').get(id),
   create: (email, name, hash) =>
@@ -46,7 +61,7 @@ module.exports = {
   getMeta: k => { const r = db.prepare('SELECT v FROM meta WHERE k = ?').get(k); return r ? r.v : ''; },
   setMeta: (k, v) => db.prepare('INSERT INTO meta (k, v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(k, v),
   listEnrollments: () =>
-    db.prepare(`SELECT e.enrolled_at, e.updated_at, e.array_user_id, e.enrollment_status, e.rejected, u.email, u.name
+    db.prepare(`SELECT e.enrolled_at, e.updated_at, e.array_user_id, e.enrollment_status, e.rejected, u.email, u.name, u.billing_status
       FROM enrollments e JOIN users u ON u.id = e.user_id ORDER BY e.enrolled_at DESC`).all(),
   setArrayUserId: (id, aid) => db.prepare('UPDATE users SET array_user_id = ? WHERE id = ?').run(aid, id),
 };

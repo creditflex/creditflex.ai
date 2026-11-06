@@ -10,6 +10,18 @@
       .catch(function () { err.textContent = 'Network error, please try again'; });
   });
   if (f && new URLSearchParams(location.search).get('timeout')) { var te = document.getElementById('err'); if (te) te.textContent = 'You were signed out after 5 minutes of inactivity. Please log in again.'; }
+  function billingBtn(id, endpoint, errId) {
+    var b = document.getElementById(id); if (!b) return;
+    b.addEventListener('click', function () {
+      var e = document.getElementById(errId); if (e) e.textContent = ''; b.disabled = true;
+      fetch(endpoint, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function (r) { if (r.status === 401) { location.href = '/sign-up'; return null; } return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (x) { if (!x) return; if (x.ok && x.j.url) location.href = x.j.url; else { b.disabled = false; if (e) e.textContent = x.j.error || 'Something went wrong. Please try again.'; } })
+        .catch(function () { b.disabled = false; if (e) e.textContent = 'Network error, please try again.'; });
+    });
+  }
+  billingBtn('start-trial', '/api/billing/checkout', 'trial-err');
+  billingBtn('manage-billing', '/api/billing/portal', 'bill-err');
   var lo = document.getElementById('logout');
   if (lo) lo.addEventListener('click', function (e) {
     e.preventDefault();

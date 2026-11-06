@@ -6,6 +6,7 @@ const db = require('./db');
 const auth = require('./auth');
 const array = require('./array');
 const mail = require('./mail');
+const stripe = require('./stripe');
 const pages = require('./pages');
 
 const MIME = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.txt': 'text/plain' };
@@ -17,6 +18,8 @@ const MIME = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; chars
   if (!cfg.proxyUrls.length) missing.push('PROXYMESH_URL or QUOTAGUARDSTATIC_URL');
   if (cfg.isProd && cfg.sessionSecret === 'dev-only-secret-change-me') missing.push('SESSION_SECRET');
   if (cfg.isProd && !cfg.adminEmail) missing.push('ADMIN_EMAIL');
+  if (!stripe.configured()) console.warn('NOTE: billing is off until STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are set. Members cannot start a trial without it.');
+  if (stripe.configured() && !cfg.stripe.webhookSecret) console.warn('WARNING: STRIPE_WEBHOOK_SECRET is missing, so subscription changes (cancellations, failed payments) will not reach the site.');
   if (!mail.configured()) console.warn('NOTE: daily enrollment summary emails are off until RESEND_API_KEY and EMAIL_FROM are set.');
   if (missing.length) console.warn('WARNING: these required settings are missing:', missing.join(', '));
 }
@@ -90,6 +93,33 @@ const STATIC_PAGES = {
   '/cookies': ['Cookie Policy', 'Replace this placeholder with your cookie policy before launch.'],
 };
 
+// ---------- Billing ----------
+const iso = sec => (sec ? new Date(sec * 1000).toISOString() : '');
+// Copies a Stripe subscription's state onto the member (status: trialing, active, past_due, canceled, ...).
+function applySubscription(sub, userIdHint) {
+  if (!sub || !sub.id) return;
+  const uid = Number((sub.metadata && sub.metadata.user_id) || userIdHint || 0);
+  const u = (uid && db.byId(uid)) || db.byStripeCustomer(typeof sub.customer === 'string' ? sub.customer : sub.customer && sub.customer.id);
+  if (!u) { console.error('Stripe subscription', sub.id, 'does not match any member'); return; }
+  if (u.billing_status === 'comped') return; // free-access members are never changed by Stripe events
+  db.setBilling(u.id, {
+    billing_status: sub.status, stripe_subscription_id: sub.id,
+    stripe_customer_id: typeof sub.customer === 'string' ? sub.customer : (sub.customer && sub.customer.id) || u.stripe_customer_id,
+    trial_end: iso(sub.trial_end), period_end: iso(sub.current_period_end || (sub.items && sub.items.data && sub.items.data[0] && sub.items.data[0].current_period_end)),
+  });
+  console.log('Billing updated for member', u.id, '->', sub.status);
+}
+const readRaw = req => new Promise((resolve, reject) => {
+  let n = 0; const chunks = [];
+  req.on('data', c => { n += c.length; if (n > 1e6) { req.destroy(); reject(new Error('Too large')); } else chunks.push(c); });
+  req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+  req.on('error', reject);
+});
+const billingInfo = u => ({
+  access: db.hasAccess(u) || isAdmin(u), status: u.billing_status || '', trialEnd: u.trial_end || '', periodEnd: u.period_end || '',
+  canManage: !!u.stripe_customer_id, billingOn: stripe.configured(),
+});
+
 async function handle(req, res) {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname.replace(/(.)\/$/, '$1');
@@ -97,6 +127,23 @@ async function handle(req, res) {
   const user = uid ? db.byId(uid) : null;
   // Sliding inactivity timeout: every request from a signed-in member renews the cookie's activity time.
   if (user && p !== '/api/logout') auth.setSession(res, user.id);
+
+  // ---------- Stripe webhook (raw body needed to check the signature) ----------
+  if (req.method === 'POST' && p === '/webhooks/stripe') {
+    const raw = await readRaw(req).catch(() => null);
+    const ev = raw && stripe.verifyWebhook(raw, req.headers['stripe-signature']);
+    if (!ev) return send(res, 400, 'Invalid signature', 'text/plain');
+    try {
+      const obj = ev.data && ev.data.object;
+      if (ev.type === 'checkout.session.completed' && obj && obj.subscription) {
+        const sub = await stripe.retrieveSubscription(typeof obj.subscription === 'string' ? obj.subscription : obj.subscription.id);
+        applySubscription(sub, obj.client_reference_id);
+      } else if (/^customer\.subscription\.(created|updated|deleted)$/.test(ev.type)) {
+        applySubscription(obj);
+      }
+    } catch (e) { console.error('Stripe webhook handling failed:', e.message); return send(res, 500, 'Error', 'text/plain'); } // Stripe retries on 5xx
+    return send(res, 200, 'ok', 'text/plain');
+  }
 
   // ---------- API ----------
   if (p.startsWith('/api/')) {
@@ -123,6 +170,24 @@ async function handle(req, res) {
       if (req.method === 'POST' && p === '/api/logout') { await readJson(req); auth.clearSession(res); return json(res, 200, { ok: true }); }
 
       if (!user) return json(res, 401, { error: 'Not logged in' });
+
+      // POST /api/billing/checkout -> Stripe Checkout: $1 identity-verification charge + 7-day trial, then $29/month
+      if (req.method === 'POST' && p === '/api/billing/checkout') {
+        await readJson(req);
+        if (billingInfo(user).access) return json(res, 400, { error: 'Your account is already active.' });
+        if (!stripe.configured()) return json(res, 503, { error: 'Billing is not available yet. Please try again soon.' });
+        try { const cs = await stripe.createCheckout(user); return json(res, 200, { url: cs.url }); }
+        catch (e) { console.error('Stripe checkout error:', e.message); return json(res, 502, { error: 'We could not start checkout. Please try again.' }); }
+      }
+      // POST /api/billing/portal -> Stripe's page where members update their card or cancel
+      if (req.method === 'POST' && p === '/api/billing/portal') {
+        await readJson(req);
+        if (!user.stripe_customer_id) return json(res, 400, { error: 'No billing account yet.' });
+        try { const ps = await stripe.createPortal(user.stripe_customer_id); return json(res, 200, { url: ps.url }); }
+        catch (e) { console.error('Stripe portal error:', e.message); return json(res, 502, { error: 'We could not open billing. Please try again.' }); }
+      }
+      // Array calls below are for active members only.
+      if (p.startsWith('/api/array/') && p !== '/api/array/event-log' && !p.endsWith('/enroll-existing') && !billingInfo(user).access) return json(res, 402, { error: 'subscription-required' });
 
       // POST /api/array/event-log: records WHICH Array events arrive (names/keys only, no personal data)
       if (req.method === 'POST' && p === '/api/array/event-log') {
@@ -214,19 +279,35 @@ async function handle(req, res) {
 
   // ---------- Pages ----------
   if (p === '/') return send(res, 200, pages.home(user));
-  if (p === '/pricing') return send(res, 200, pages.pricing(user));
+  if (p === '/pricing') return send(res, 200, pages.pricing(user, user ? billingInfo(user) : null));
   if (p === '/login' || p === '/sign-up') return user ? redirect(res, '/dashboard') : send(res, 200, pages.authPage(p.slice(1), null));
+  if (p === '/billing/success') {
+    if (!user) return redirect(res, '/login');
+    const sid = url.searchParams.get('session_id');
+    if (sid && stripe.configured()) {
+      try {
+        const cs = await stripe.retrieveSession(sid);
+        if (String(cs.client_reference_id) === String(user.id) && cs.subscription && typeof cs.subscription === 'object') {
+          if (cs.customer) db.setBilling(user.id, { stripe_customer_id: typeof cs.customer === 'string' ? cs.customer : cs.customer.id });
+          applySubscription(cs.subscription, user.id);
+        }
+      } catch (e) { console.error('Stripe success sync failed (the webhook will catch up):', e.message); }
+    }
+    return redirect(res, '/dashboard?welcome=1');
+  }
   if (p === '/admin/enrollments.csv') {
     if (!isAdmin(user)) return redirect(res, '/');
-    const head = ['enrolled_at', 'email', 'name', 'array_user_id', 'enrollment_status', 'rejected_products'];
-    const rows = db.listEnrollments().map(e => [e.enrolled_at, e.email, e.name, e.array_user_id, e.enrollment_status, e.rejected].map(csvCell).join(','));
+    const head = ['enrolled_at', 'email', 'name', 'array_user_id', 'enrollment_status', 'rejected_products', 'billing_status'];
+    const rows = db.listEnrollments().map(e => [e.enrolled_at, e.email, e.name, e.array_user_id, e.enrollment_status, e.rejected, e.billing_status].map(csvCell).join(','));
     res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="creditflex-enrollments.csv"', 'Cache-Control': 'no-store' });
     return res.end([head.join(',')].concat(rows).join('\r\n'));
   }
-  if (p === '/admin') return isAdmin(user) ? send(res, 200, pages.admin(user, db.listEnrollments(), mail.configured(), cfg.mail.to)) : redirect(res, '/');
-  if (p === '/dashboard') return user ? send(res, 200, pages.dashboard(user)) : redirect(res, '/login');
-  if (p === '/credit-dashboard') return user ? send(res, 200, pages.creditTools(user)) : redirect(res, '/login');
-  if (p === '/credit-tools-v2') return user ? send(res, 200, pages.creditTools(user)) : redirect(res, '/login');
+  if (p === '/admin') return isAdmin(user) ? send(res, 200, pages.admin(user, db.listEnrollments(), mail.configured(), cfg.mail.to, stripe.configured())) : redirect(res, '/');
+  if (p === '/dashboard') return user ? send(res, 200, pages.dashboard(user, billingInfo(user))) : redirect(res, '/login');
+  if (p === '/credit-dashboard' || p === '/credit-tools-v2') {
+    if (!user) return redirect(res, '/login');
+    return billingInfo(user).access ? send(res, 200, pages.creditTools(user)) : redirect(res, '/dashboard?subscribe=1');
+  }
   if (STATIC_PAGES[p]) return send(res, 200, pages.simple(user, ...STATIC_PAGES[p]));
 
   // ---------- Static files (flat layout: files live next to server.js) ----------

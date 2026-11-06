@@ -60,5 +60,15 @@ module.exports = {
     to: (process.env.NOTIFY_EMAIL || 'support@creditflex.ai').trim(),
     apiUrl: process.env.EMAIL_API_URL || 'https://api.resend.com/emails',
   },
+  // Stripe billing: $1 identity-verification charge today + 7-day trial, then $29/month.
+  stripe: {
+    secretKey: (process.env.STRIPE_SECRET_KEY || '').trim(),
+    webhookSecret: (process.env.STRIPE_WEBHOOK_SECRET || '').trim(),
+    apiUrl: process.env.STRIPE_API_URL || 'https://api.stripe.com',
+    siteUrl: (process.env.SITE_URL || 'https://creditflex.ai').replace(/\/+$/, ''),
+    monthlyCents: Number(process.env.PRICE_MONTHLY_CENTS || 2900),
+    verifyCents: Number(process.env.PRICE_VERIFY_CENTS || 100),
+    trialDays: Number(process.env.TRIAL_DAYS || 7),
+  },
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
 };
